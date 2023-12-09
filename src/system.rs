@@ -7,6 +7,8 @@ use crankstart_sys::ctypes::c_int;
 pub use crankstart_sys::PDButtons;
 use crankstart_sys::{PDDateTime, PDLanguage, PDPeripherals};
 
+use crate::graphics::Bitmap;
+
 static mut SYSTEM: System = System(ptr::null_mut());
 
 /// Playdate System functions
@@ -256,5 +258,26 @@ impl System {
     /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-system.getLanguage)
     pub fn get_language(&self) -> Result<PDLanguage, Error> {
         pd_func_caller!((*self.0).getLanguage)
+    }
+
+    /// A game can optionally provide an image to be displayed alongside the system menu. bitmap must
+    /// be a 400x240 LCDBitmap. All important content should be in the left half of the image in an area
+    /// 200 pixels wide, as the menu will obscure the rest. The right side of the image will be visible
+    /// briefly as the menu animates in and out.
+    /// Optionally, a non-zero xoffset, can be provided. This must be a number between 0 and 200 and will
+    /// cause the menu image to animate to a position offset left by xoffset pixels as the menu is animated in.
+    /// 
+    /// This function could be called in response to the kEventPause event in your implementation of eventHandler().
+    ///
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-system.setMenuImage)
+    /// void playdate->system->setMenuImage(LCDBitmap* bitmap, int xOffset);
+    pub fn set_menu_image(&self, bitmap: Bitmap, x_offset: i32) -> Result<(), Error> {
+        if cfg!(debug_assertions) {
+            assert!(x_offset > 0 && x_offset <= 200, "x_offset must be between 0 and 200");
+            let data = bitmap.get_data()?;
+            assert_eq!(bitmap.get_data()?.width, 400, "menu images must be 400x240");
+            assert_eq!(bitmap.get_data()?.height, 240, "menu images must be 400x240");
+        }
+        pd_func_caller!((*self.0).setMenuImage, bitmap.inner.borrow().raw_bitmap, x_offset)
     }
 }
