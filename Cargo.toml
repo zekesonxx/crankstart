@@ -45,6 +45,7 @@ crate-type = ["staticlib", "cdylib"]
 [dependencies]
 anyhow = { version = "1.0.31", default-features = false }
 arrayvec = { version = "0.7.4", default-features = false }
+bitflags = "2.4.1"
 crankstart-sys = { version = "0.1.2", path = "crankstart-sys" }
 euclid = { version = "0.22.9", default-features = false, features = [ "libm" ] }
 hashbrown = "0.14.0"

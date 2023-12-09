@@ -1,5 +1,7 @@
 //! Filesystem-related functionality
-#![warn(missing_docs)]
+
+use crankstart_sys::PDDateTime;
+//#![warn(missing_docs)]
 use {
     crate::{log_to_console, pd_func_caller, pd_func_caller_log},
     alloc::{boxed::Box, format, string::String, vec::Vec},
@@ -8,9 +10,80 @@ use {
     crankstart_sys::{ctypes::c_void, FileOptions, PDButtons, SDFile},
     cstr_core::CStr,
     cstr_core::CString,
+    bitflags::bitflags,
 };
 
-pub use crankstart_sys::FileStat;
+/// Information about a file retrieved via [FileSystem::stat()]
+///
+/// This is a high level wrapper around [crankstart_sys::FileStat], and can be converted to/from it at will.
+/// 
+/// [Playdate SDK Reference for the inner `FileStat`](https://sdk.play.date/inside-playdate-with-c/#f-file.stat)
+#[derive(Clone, Default)]
+pub struct FileStat {
+    inner: crankstart_sys::FileStat
+}
+
+impl FileStat {
+    /// Return whether the file in question is a directory.
+    pub fn is_dir(&self) -> bool {
+        self.inner.isdir == 1
+    }
+
+    /// Return the size of the file, in bytes.
+    pub fn size(&self) -> u32 {
+        self.inner.size
+    }
+
+    /// Return the last time the file was modified.
+    /// Note that this performs a conversion from the FAT32 modification time.
+    /// 
+    /// To get the original modified time, use `.into()` to convert to a
+    /// `crankstart_sys::FileStat` and access its members:
+    /// ```no_run
+    /// # fn main() -> Result<()> {
+    /// let file = FileSystem::get().stat("example.txt");
+    /// let stat: crankstart_sys::FileStat = file.stat()?.into();
+    /// println!("last modified at time: {}:{}:{}", stat.m_hour, stat.m_minute, stat.m_second);
+    /// # Ok(()) }
+    /// ```
+    pub fn last_modified_pddatetime(&self) -> PDDateTime {
+        // calculate the weekday, since PDDateTime has it for some reason. using the algorithm described here:
+        // https://en.wikipedia.org/wiki/Determination_of_the_day_of_the_week
+        // d = day of month (1-31)
+        // m = month of the year (1-12)
+        // y = year
+        // c = the century mod 4
+        // w = (d + m + y + c) mod 7
+        // this calculates 0-6 instead of 1-7, so add 1 at the end
+        let d = self.inner.m_day;
+        let m = self.inner.m_month;
+        let y = self.inner.m_year;
+        let c = (y/1000)%4;
+        let weekday = ((d+m+y+c)%7)+1;
+
+        PDDateTime {
+            year: self.inner.m_year as u16,
+            month: self.inner.m_month as u8,
+            day: self.inner.m_day as u8,
+            weekday: weekday as u8,
+            hour: self.inner.m_hour as u8,
+            minute: self.inner.m_hour as u8,
+            second: self.inner.m_second as u8
+        }
+    }
+}
+
+impl From<crankstart_sys::FileStat> for FileStat {
+    fn from(inner: crankstart_sys::FileStat) -> Self {
+        FileStat { inner }
+    }
+}
+
+impl From<FileStat> for crankstart_sys::FileStat {
+    fn from(value: FileStat) -> Self {
+        value.inner
+    }
+}
 
 /// Internal helper function that handles getting the human-readable error from a filesystem call
 fn ensure_filesystem_success(result: i32, function_name: &str) -> Result<(), Error> {
@@ -43,6 +116,30 @@ extern "C" fn list_files_callback(
         let path = CStr::from_ptr(filename).to_string_lossy().into_owned();
         let files_ptr: *mut Vec<String> = userdata as *mut Vec<String>;
         (*files_ptr).push(path);
+    }
+}
+
+
+bitflags! {
+    /// File handle flags to set when opening a file with [FileSystem::open]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct OpenOptions: u32 {
+        /// Read a file from the game's pdx directory
+        const ReadPDX = crankstart_sys::FileOptions::kFileRead.0;
+        /// Read a file from the game's data directory
+        const ReadData = crankstart_sys::FileOptions::kFileReadData.0;
+        /// Read a file from the game's data directory, if not found try the game's pdx directory
+        const ReadDataAndPDX = Self::ReadPDX.bits() | Self::ReadData.bits();
+        /// Write a file to the game's data directory
+        const Write = crankstart_sys::FileOptions::kFileWrite.0;
+        /// Write in append mode to a file to the game's data directory
+        const Append = crankstart_sys::FileOptions::kFileAppend.0;
+    }
+}
+
+impl From<OpenOptions> for crankstart_sys::FileOptions {
+    fn from(value: OpenOptions) -> Self {
+        crankstart_sys::FileOptions(value.bits())
     }
 }
 
@@ -83,10 +180,10 @@ impl FileSystem {
     /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-file.stat)
     pub fn stat(&self, path: &str) -> Result<FileStat, Error> {
         let c_path = CString::new(path).map_err(Error::msg)?;
-        let mut file_stat = FileStat::default();
+        let mut file_stat = crankstart_sys::FileStat::default();
         let result = pd_func_caller!((*self.0).stat, c_path.as_ptr(), &mut file_stat)?;
         ensure_filesystem_success(result, "stat")?;
-        Ok(file_stat)
+        Ok(file_stat.into())
     }
 
     /// Creates the given path in the Data/<gameid> folder. It does not create intermediate folders.
@@ -128,20 +225,17 @@ impl FileSystem {
 
     /// Opens a [File] for the file at path. [FileOptions] is a bitmask.
     /// 
-    /// The `kFileRead` mode opens a file in the game's pdx, while `kFileReadData` searches the game’s data folder;
-    /// to search the data folder first then fall back on the game pdx,
-    /// use the bitwise combination `kFileRead|kFileReadData`.
-    /// `kFileWrite` and `kFileAppend` always write to the data folder.
+    /// Files can be read from the game's pdx folder, or the game's data folder.
+    /// Files can only be written to the game's data folder, the game's pdx folder is immutable to the game.
+    /// Files can be opened in read, write, and/or append modes. See [OpenOptions] for the potential options.
     /// 
     /// The function will error if the file cannot be opened.
-    /// 
     /// The filesystem has a limit of 64 simultaneous open files.
     /// 
     /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-file.open)
-    pub fn open(&self, path: &str, options: FileOptions) -> Result<File, Error> {
+    pub fn open(&self, path: &str, options: OpenOptions) -> Result<File, Error> {
         let c_path = CString::new(path).map_err(Error::msg)?;
-        
-        let raw_file = pd_func_caller!((*self.0).open, c_path.as_ptr(), options)?;
+        let raw_file = pd_func_caller!((*self.0).open, c_path.as_ptr(), options.into())?;
         ensure!(
             !raw_file.is_null(),
             "Failed to open file at {} with options {:?}",
@@ -156,8 +250,8 @@ impl FileSystem {
     /// This is a convenience function and not from the original Playdate C API
     pub fn read_file_as_string(&self, path: &str) -> Result<String, Error> {
         let stat = self.stat(path)?;
-        let mut buffer = alloc::vec![0; stat.size as usize];
-        let sd_file = self.open(path, FileOptions::kFileRead | FileOptions::kFileReadData)?;
+        let mut buffer = alloc::vec![0; stat.size() as usize];
+        let sd_file = self.open(path, OpenOptions::ReadDataAndPDX)?;
         sd_file.read(&mut buffer)?;
         String::from_utf8(buffer).map_err(Error::msg)
     }
@@ -167,7 +261,7 @@ static mut FILE_SYSTEM: FileSystem = FileSystem(ptr::null_mut());
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy)]
-/// How to seek in a file, used by [seek()][self::File::seek]
+/// How to seek in a file, used by [File::seek()]
 pub enum Whence {
     /// Seek relative to the beginning of the file
     Set = crankstart_sys::SEEK_SET as i32,
