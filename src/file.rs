@@ -137,6 +137,20 @@ bitflags! {
     }
 }
 
+impl OpenOptions {
+    /// Return `true` if the options described are valid, `false` otherwise
+    /// 
+    /// This simply checks that, if reading from the game's pdx directory,
+    /// you aren't also opening in write or append mode.
+    pub fn validate(&self) -> bool {
+        if self.contains(OpenOptions::ReadPDX) {
+            !(self.contains(OpenOptions::Write) || self.contains(OpenOptions::Append))
+        } else {
+            true
+        }
+    }
+}
+
 impl From<OpenOptions> for crankstart_sys::FileOptions {
     fn from(value: OpenOptions) -> Self {
         crankstart_sys::FileOptions(value.bits())
@@ -234,6 +248,7 @@ impl FileSystem {
     /// 
     /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-file.open)
     pub fn open(&self, path: &str, options: OpenOptions) -> Result<File, Error> {
+        debug_assert!(options.validate());
         let c_path = CString::new(path).map_err(Error::msg)?;
         let raw_file = pd_func_caller!((*self.0).open, c_path.as_ptr(), options.into())?;
         ensure!(
@@ -245,7 +260,7 @@ impl FileSystem {
         Ok(File(raw_file))
     }
 
-    /// Open the file at `path` and read it completely into a Rust [String]
+    /// Open the file at `path` and read it completely into a Rust [String].
     /// 
     /// This is a convenience function and not from the original Playdate C API
     pub fn read_file_as_string(&self, path: &str) -> Result<String, Error> {
