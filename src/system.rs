@@ -140,15 +140,6 @@ impl System {
         }
     }
 
-    pub fn log_to_console_raw(text: &str) {
-        unsafe {
-            if !SYSTEM.0.is_null() {
-                let log_to_console_fn = (*SYSTEM.0).logToConsole.expect("logToConsole");
-                log_to_console_fn(text.as_ptr() as *mut crankstart_sys::ctypes::c_char);
-            }
-        }
-    }
-
     /// Calls the log function, outputting an error in red to the console, then pauses execution.
     /// 
     /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-system.error)
@@ -159,15 +150,6 @@ impl System {
                     let error_fn = (*SYSTEM.0).error.expect("error");
                     error_fn(c_text.as_ptr() as *mut crankstart_sys::ctypes::c_char);
                 }
-            }
-        }
-    }
-
-    pub fn error_raw(text: &str) {
-        unsafe {
-            if !SYSTEM.0.is_null() {
-                let error_fn = (*SYSTEM.0).error.expect("error");
-                error_fn(text.as_ptr() as *mut crankstart_sys::ctypes::c_char);
             }
         }
     }
