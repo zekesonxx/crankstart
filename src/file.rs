@@ -121,8 +121,11 @@ extern "C" fn list_files_callback(
 
 
 bitflags! {
-    /// File handle flags to set when opening a file with [FileSystem::open]
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    /// File handle flags to set when opening a file
+    /// 
+    /// This is designed to look similar to [`std::fs::OpenOptions`](https://doc.rust-lang.org/std/fs/struct.OpenOptions.html),
+    /// though it is just a bitmask, and can be passed to [FileSystem::open].
+    #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct OpenOptions: u32 {
         /// Read a file from the game's pdx directory
         const ReadPDX = crankstart_sys::FileOptions::kFileRead.0;
@@ -138,6 +141,31 @@ bitflags! {
 }
 
 impl OpenOptions {
+    /// Return a new blank OpenOptions
+    /// This is mostly here to provide API similarity to std::fs::OpenOptions
+    pub fn new() -> Self {
+        OpenOptions::default()
+    }
+    /// Sets the option for read access, targeting the game's data directory.
+    pub fn read(&mut self, set: bool) -> &mut Self {
+        self.set(OpenOptions::ReadData, set);
+        self
+    }
+    /// Sets the option for read access, targeting the game's pdx directory.
+    pub fn read_pdx(&mut self, set: bool) -> &mut Self {
+        self.set(OpenOptions::ReadPDX, set);
+        self
+    }
+    /// Sets the option for write access, targeting the game's data directory.
+    pub fn write(&mut self, set: bool) -> &mut Self {
+        self.set(OpenOptions::Write, set);
+        self
+    }
+    /// Sets the option for append mode, targeting the game's data directory.
+    pub fn append(&mut self, set: bool) -> &mut Self {
+        self.set(OpenOptions::Append, set);
+        self
+    }
     /// Return `true` if the options described are valid, `false` otherwise
     /// 
     /// This simply checks that, if reading from the game's pdx directory,
@@ -148,6 +176,10 @@ impl OpenOptions {
         } else {
             true
         }
+    }
+    /// Opens a file at `path` with the options specified by `self`.
+    pub fn open<S: AsRef<str>>(&self, path: S) -> Result<File, Error> {
+        FileSystem::get().open(path.as_ref(), *self)
     }
 }
 
@@ -171,7 +203,7 @@ impl FileSystem {
 
     /// Returns a list of every file at `path`. Subfolders are indicated by a trailing slash `'/'`
     /// in filename. listfiles() does not recurse into subfolders. If `show_hidden` is set, files
-    /// beginning with a period will be included; otherwise, they are skipped.
+    /// beginning with a period `'.'` will be included; otherwise, they are skipped.
     /// 
     /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-file.listfiles)
     pub fn listfiles(&self, path: &str, show_hidden: bool) -> Result<Vec<String>, Error> {
