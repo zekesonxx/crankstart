@@ -33,11 +33,9 @@ impl System {
     /// 
     /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-system.realloc)
 
-    pub(crate) fn realloc(&self, ptr: *mut c_void, size: usize) -> *mut c_void {
-        unsafe {
-            let realloc_fn = (*self.0).realloc.expect("realloc");
-            realloc_fn(ptr, size)
-        }
+    pub(crate) unsafe fn realloc(&self, ptr: *mut c_void, size: usize) -> *mut c_void {
+        let realloc_fn = (*self.0).realloc.expect("realloc");
+        realloc_fn(ptr, size)
     }
 
     /// Replaces the default Lua run loop function with a custom update function.

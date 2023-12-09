@@ -108,7 +108,9 @@ impl<'a> Iterator for CollisionInfoIter<'a> {
 
 impl Drop for Collisions {
     fn drop(&mut self) {
-        System::get().realloc(self.0 as *mut core::ffi::c_void, 0);
+        unsafe {
+            System::get().realloc(self.0 as *mut core::ffi::c_void, 0);
+        }
     }
 }
 
