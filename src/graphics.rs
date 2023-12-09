@@ -375,7 +375,12 @@ impl Font {
 
 impl Drop for Font {
     fn drop(&mut self) {
-        log_to_console!("Leaking a font");
+        // the C API is currently missing a freeFont command
+        // but all it'd be is calling realloc(font, 0)
+        // https://devforum.play.date/t/how-do-i-release-font-in-c-api/12190/2
+        unsafe {
+            System::get().realloc(self.0 as *mut core::ffi::c_void, 0);
+        }
     }
 }
 
@@ -461,6 +466,55 @@ impl BitmapTable {
     }
 }
 
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+/// Drawing mode to set on images
+///
+/// The draw mode applies to images and fonts (which are technically images).
+/// The draw mode does not apply to primitive shapes such as lines or rectangles. 
+///
+/// [Playdate SDK Reference](https://sdk.play.date/2.1.1/Inside%20Playdate%20with%20C.html#f-graphics.setDrawMode)
+///
+/// [Playdate Lua SDK Reference (with example images)](https://sdk.play.date/2.1.1/Inside%20Playdate.html#f-graphics.setImageDrawMode)
+pub enum BitmapDrawMode {
+    /// Images are drawn exactly as they are
+    /// (black pixels are drawn black and white pixels are drawn white)
+    Copy = LCDBitmapDrawMode::kDrawModeCopy as u32,
+    /// Any white portions of an image are drawn transparent
+    /// (black pixels are drawn black and white pixels are drawn transparent)
+    WhiteTransparent = LCDBitmapDrawMode::kDrawModeWhiteTransparent as u32,
+    /// Any black portions of an image are drawn transparent
+    /// (black pixels are drawn transparent and white pixels are drawn white)
+    BlackTransparent = LCDBitmapDrawMode::kDrawModeBlackTransparent as u32,
+    /// All non-transparent pixels are drawn white
+    /// (black pixels are drawn white and white pixels are drawn white)
+    FillWhite = LCDBitmapDrawMode::kDrawModeFillWhite as u32,
+    /// All non-transparent pixels are drawn black
+    /// (black pixels are drawn black and white pixels are drawn black)
+    FillBlack = LCDBitmapDrawMode::kDrawModeFillBlack as u32,
+    /// Pixels are drawn inverted on white backgrounds, creating an effect where
+    /// any white pixels in the original image will always be visible, regardless
+    /// of the background color, and any black pixels will appear transparent
+    /// (on a white background, black pixels are drawn white and white pixels are drawn black)
+    XOR = LCDBitmapDrawMode::kDrawModeXOR as u32,
+    /// Pixels are drawn inverted on black backgrounds, creating an effect where
+    /// any black pixels in the original image will always be visible, regardless
+    /// of the background color, and any white pixels will appear transparent
+    /// (on a black background, black pixels are drawn white and white pixels are drawn black)
+    NXOR = LCDBitmapDrawMode::kDrawModeNXOR as u32,
+    /// Pixels are drawn inverted
+    /// (black pixels are drawn white and white pixels are drawn black)
+    Inverted = LCDBitmapDrawMode::kDrawModeInverted as u32,
+}
+
+impl From<BitmapDrawMode> for LCDBitmapDrawMode {
+    fn from(value: BitmapDrawMode) -> Self {
+        // safety: the only possible values are the ones defined above
+        // which are all `LCDBitmapDrawMode`s to begin with
+        unsafe { core::mem::transmute(value) }
+    }
+}
+
 static mut GRAPHICS: Graphics = Graphics(ptr::null_mut());
 
 #[derive(Clone, Debug)]
@@ -505,6 +559,12 @@ impl Graphics {
         pd_func_caller!((*self.0).popContext)
     }
 
+    /// Returns the current display frame buffer.
+    /// 
+    /// Rows are 32-bit aligned, so the row stride is 52 bytes, with the extra 2 bytes per row ignored.
+    /// Bytes are MSB-ordered; i.e., the pixel in column 0 is the 0x80 bit of the first byte of the row.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.getFrame)
     pub fn get_frame(&self) -> Result<&'static mut [u8], Error> {
         let ptr = pd_func_caller!((*self.0).getFrame)?;
         anyhow::ensure!(!ptr.is_null(), "Null pointer returned from getFrame");
@@ -512,6 +572,11 @@ impl Graphics {
         Ok(frame)
     }
 
+    /// Returns a bitmap containing the contents of the display buffer.
+    /// 
+    /// The system owns this bitmap—​do not free it!
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.getDisplayFrame)
     pub fn get_display_frame(&self) -> Result<&'static mut [u8], Error> {
         let ptr = pd_func_caller!((*self.0).getDisplayFrame)?;
         anyhow::ensure!(!ptr.is_null(), "Null pointer returned from getDisplayFrame");
@@ -519,6 +584,11 @@ impl Graphics {
         Ok(frame)
     }
 
+    /// Only valid in the Simulator, returns the debug framebuffer as a bitmap.
+    /// 
+    /// Function will error on device.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.getDebugBitmap)
     pub fn get_debug_bitmap(&self) -> Result<Bitmap, Error> {
         let raw_bitmap = pd_func_caller!((*self.0).getDebugBitmap)?;
         anyhow::ensure!(
@@ -541,19 +611,43 @@ impl Graphics {
         pd_func_caller!((*self.0).setBackgroundColor, color)
     }
 
-    pub fn set_draw_mode(&self, mode: LCDBitmapDrawMode) -> Result<(), Error> {
-        pd_func_caller!((*self.0).setDrawMode, mode)
+    /// Sets the mode used for drawing bitmaps.
+    /// Note that text drawing uses bitmaps, so this affects how fonts are displayed as well.
+    ///
+    /// [Playdate SDK Reference](https://sdk.play.date/2.1.1/Inside%20Playdate%20with%20C.html#f-graphics.setDrawMode)
+    ///
+    /// [Playdate Lua SDK Reference (with example images)](https://sdk.play.date/2.1.1/Inside%20Playdate.html#f-graphics.setImageDrawMode)
+    pub fn set_draw_mode(&self, mode: BitmapDrawMode) -> Result<(), Error> {
+        pd_func_caller!((*self.0).setDrawMode, mode.into())
     }
 
+    /// After updating pixels in the buffer returned by getFrame(), you must tell the graphics system
+    /// which rows were updated. This function marks a contiguous range of rows as updated
+    /// (e.g., markUpdatedRows(0,LCD_ROWS-1) tells the system to update the entire display).
+    /// Both “start” and “end” are included in the range.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.markUpdatedRows)
     pub fn mark_updated_rows(&self, range: RangeInclusive<i32>) -> Result<(), Error> {
         let (start, end) = range.into_inner();
         pd_func_caller!((*self.0).markUpdatedRows, start, end)
     }
 
+    /// Manually flushes the current frame buffer out to the display.
+    /// 
+    /// This function is automatically called after each pass through the run loop,
+    /// so there shouldn’t be any need to call it yourself.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.display)
     pub fn display(&self) -> Result<(), Error> {
         pd_func_caller!((*self.0).display)
     }
 
+    /// Offsets the origin point for all drawing calls to x, y (can be negative).
+    /// 
+    /// This is useful, for example, for centering a "camera" on a sprite that is
+    /// moving around a world larger than the screen.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.setDrawOffset)
     pub fn set_draw_offset(&self, offset: ScreenVector) -> Result<(), Error> {
         pd_func_caller!((*self.0).setDrawOffset, offset.x, offset.y)
     }
