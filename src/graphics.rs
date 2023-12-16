@@ -442,6 +442,7 @@ impl Drop for BitmapTableInner {
 
 type BitmapTableInnerPtr = Rc<RefCell<BitmapTableInner>>;
 
+/// An array of [Bitmap]s of equal dimensions
 #[derive(Clone, Debug)]
 pub struct BitmapTable {
     inner: BitmapTableInnerPtr,
@@ -457,10 +458,16 @@ impl BitmapTable {
         }
     }
 
+    /// Loads the imagetable at `path` into the existing table.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.loadIntoBitmapTable)
     pub fn load(&self, path: &str) -> Result<(), Error> {
         self.inner.borrow_mut().load(path)
     }
 
+    /// Get the [Bitmap] stored in the table at `index`.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.getTableBitmap)
     pub fn get_bitmap(&self, index: usize) -> Result<Bitmap, Error> {
         self.inner.borrow_mut().get_bitmap(index)
     }
@@ -572,9 +579,7 @@ impl Graphics {
         Ok(frame)
     }
 
-    /// Returns a bitmap containing the contents of the display buffer.
-    /// 
-    /// The system owns this bitmap—​do not free it!
+    /// Returns the raw bits in the display buffer, the last completed frame.
     /// 
     /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.getDisplayFrame)
     pub fn get_display_frame(&self) -> Result<&'static mut [u8], Error> {
@@ -598,15 +603,36 @@ impl Graphics {
         Ok(Bitmap::new(raw_bitmap, false))
     }
 
+    /// Returns a copy the contents of the working frame buffer as a bitmap.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/2.1.1/Inside%20Playdate%20with%20C.html#f-graphics.copyFrameBufferBitmap)
     pub fn get_framebuffer_bitmap(&self) -> Result<Bitmap, Error> {
         let raw_bitmap = pd_func_caller!((*self.0).copyFrameBufferBitmap)?;
         anyhow::ensure!(
             !raw_bitmap.is_null(),
-            "Null pointer returned from getFrameBufferBitmap"
+            "Null pointer returned from copyFrameBufferBitmap"
         );
         Ok(Bitmap::new(raw_bitmap, true))
     }
 
+    /// Returns a bitmap containing the contents of the display buffer.
+    /// 
+    /// This is the active display buffer bitmap, not a copy.
+    /// For a copy you can do what you want with, see [Graphics::get_framebuffer_bitmap].
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/2.1.1/Inside%20Playdate%20with%20C.html#f-graphics.getDisplayBufferBitmap)
+    pub fn get_display_buffer_bitmap(&self) -> Result<Bitmap, Error> {
+        let raw_bitmap = pd_func_caller!((*self.0).getDisplayBufferBitmap)?;
+        anyhow::ensure!(
+            !raw_bitmap.is_null(),
+            "Null pointer returned from getDisplayBufferBitmap"
+        );
+        Ok(Bitmap::new(raw_bitmap, false))
+    }
+
+    /// Sets the background color shown when the display is [offset][crate::Display::set_offset] or for clearing dirty areas in the sprite system.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/2.1.1/Inside%20Playdate%20with%20C.html#f-graphics.setBackgroundColor)
     pub fn set_background_color(&self, color: LCDSolidColor) -> Result<(), Error> {
         pd_func_caller!((*self.0).setBackgroundColor, color)
     }
@@ -652,6 +678,9 @@ impl Graphics {
         pd_func_caller!((*self.0).setDrawOffset, offset.x, offset.y)
     }
 
+    /// Allocates and returns a new [Bitmap] of [`size`][ScreenSize] dimensions filled with `bg_color`.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.newBitmap)
     pub fn new_bitmap(&self, size: ScreenSize, bg_color: LCDColor) -> Result<Bitmap, Error> {
         let raw_bitmap = pd_func_caller!(
             (*self.0).newBitmap,
@@ -666,6 +695,10 @@ impl Graphics {
         Ok(Bitmap::new(raw_bitmap, true))
     }
 
+    /// Allocates and returns a new [Bitmap] from the file at `path`.
+    /// If there is no file at path, the function will error.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.newBitmap)
     pub fn load_bitmap(&self, path: &str) -> Result<Bitmap, Error> {
         let c_path = CString::new(path).map_err(Error::msg)?;
         let mut out_err: *const crankstart_sys::ctypes::c_char = ptr::null_mut();
@@ -684,6 +717,9 @@ impl Graphics {
         }
     }
 
+    /// Allocates and returns a new [BitmapTable] that can hold `count` [Bitmap]s of size `size`.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.newBitmapTable)
     pub fn new_bitmap_table(&self, count: usize, size: ScreenSize) -> Result<BitmapTable, Error> {
         let raw_bitmap_table = pd_func_caller!(
             (*self.0).newBitmapTable,
@@ -695,6 +731,10 @@ impl Graphics {
         Ok(BitmapTable::new(raw_bitmap_table))
     }
 
+    /// Allocates and returns a new [BitmapTable] from the file at `path`.
+    /// If there is no file at path, the function will error.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.loadBitmapTable)
     pub fn load_bitmap_table(&self, path: &str) -> Result<BitmapTable, Error> {
         let c_path = CString::new(path).map_err(Error::msg)?;
         let mut out_err: *const crankstart_sys::ctypes::c_char = ptr::null_mut();
@@ -714,10 +754,16 @@ impl Graphics {
         }
     }
 
+    /// Clears the entire display, filling it with [`color`][LCDColor].
+    ///
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.clear)
     pub fn clear(&self, color: LCDColor) -> Result<(), Error> {
         pd_func_caller!((*self.0).clear, color.into())
     }
 
+    /// Draws a line from `p1` to `p2` with a stroke width of `width` and the provided [`color`][LCDColor].
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.drawLine)
     pub fn draw_line(
         &self,
         p1: ScreenPoint,
@@ -736,6 +782,11 @@ impl Graphics {
         )
     }
 
+    /// Fills the polygon with vertices at the given coordinates using the given color and fill, or winding, rule.
+    /// 
+    /// [Wikipedia: Nonzero-rule](https://en.wikipedia.org/wiki/Nonzero-rule)
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/2.1.1/Inside%20Playdate%20with%20C.html#f-graphics.fillPolygon)
     pub fn fill_polygon(
         &self,
         coords: &[ScreenPoint],
@@ -759,6 +810,9 @@ impl Graphics {
         Ok(())
     }
 
+    /// Draws a filled triangle with points at `p1`, `p2`, and `p3` with the provided [`color`][LCDColor].
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.fillTriangle)
     pub fn fill_triangle(
         &self,
         p1: ScreenPoint,
@@ -778,6 +832,9 @@ impl Graphics {
         )
     }
 
+    /// Draws a hollow [ScreenRect] rectangle on the screen with the provided [`color`][LCDColor].
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.drawRect)
     pub fn draw_rect(&self, rect: ScreenRect, color: LCDColor) -> Result<(), Error> {
         pd_func_caller!(
             (*self.0).drawRect,
@@ -789,6 +846,9 @@ impl Graphics {
         )
     }
 
+    /// Draws a filled [ScreenRect] rectangle on the screen with the provided [`color`][LCDColor].
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.fillRect)
     pub fn fill_rect(&self, rect: ScreenRect, color: LCDColor) -> Result<(), Error> {
         pd_func_caller!(
             (*self.0).fillRect,
@@ -800,6 +860,15 @@ impl Graphics {
         )
     }
 
+    /// Draws a filled ellipse inside the rectangle `size` at position `origin`
+    /// 
+    /// * The ellipse will be drawn inset within the rectangle bounds.
+    /// * The line will be drawn in the provided `line_width` and [`color`][LCDColor]
+    /// * If `start_angle == end_angle`, this draws a complete ellipse.
+    /// * If `start_angle != end_angle`, this draws an arc between the given angles.
+    /// * Angles are given in degrees, clockwise from due north.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.drawEllipse)
     pub fn draw_ellipse(
         &self,
         origin: ScreenPoint,
@@ -822,6 +891,15 @@ impl Graphics {
         )
     }
 
+    /// Draws a solid ellipse inside the rectangle `size` at position `origin`
+    /// 
+    /// * The ellipse will be drawn inset within the rectangle bounds.
+    /// * The line will be drawn in the provided `line_width` and [`color`][LCDColor]
+    /// * If `start_angle == end_angle`, this draws a complete ellipse.
+    /// * If `start_angle != end_angle`, this draws an wedge (or "pacman") shape between the given angles.
+    /// * Angles are given in degrees, clockwise from due north.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.drawEllipse)
     pub fn fill_ellipse(
         &self,
         target: OptionalBitmap,
@@ -846,6 +924,9 @@ impl Graphics {
         )
     }
 
+    /// Load the font at `path` into a [Font] object.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.loadFont)
     pub fn load_font(&self, path: &str) -> Result<Font, Error> {
         let c_path = CString::new(path).map_err(Error::msg)?;
         let mut out_err: *const crankstart_sys::ctypes::c_char = ptr::null_mut();
@@ -864,11 +945,20 @@ impl Graphics {
         }
     }
 
+    /// Sets the [font][Font] to use in subsequent [Graphics::draw_text()] calls.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.loadFont)
     pub fn set_font(&self, font: &Font) -> Result<(), Error> {
         pd_func_caller_log!((*self.0).setFont, font.0);
         Ok(())
     }
 
+    /// Draws the given text using the provided options.
+    /// 
+    /// If no font has been set with [Graphics::set_font()],
+    /// the default system font `Asheville Sans 14 Light` is used.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.drawText)
     pub fn draw_text(&self, text: &str, position: ScreenPoint) -> Result<i32, Error> {
         let c_text = CString::new(text).map_err(Error::msg)?;
         pd_func_caller!(
@@ -881,6 +971,9 @@ impl Graphics {
         )
     }
 
+    /// Returns the width of the given `text` in the given [font][Font].
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.getTextWidth)
     pub fn get_text_width(&self, font: &Font, text: &str, tracking: i32) -> Result<i32, Error> {
         let c_text = CString::new(text).map_err(Error::msg)?;
         pd_func_caller!(
@@ -893,10 +986,27 @@ impl Graphics {
         )
     }
 
+    /// Returns the height of the given [font][Font].
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.getFontHeight)
     pub fn get_font_height(&self, font: &Font) -> Result<u8, Error> {
         pd_func_caller!((*self.0).getFontHeight, font.0)
     }
 
+    /// Returns the height of the system's default font.
+    /// 
+    /// This isn't a real API call, the system's default font is `Asheville Sans 14 Light`,
+    /// a 14 point font.
+    /// 
+    /// This function just returns `14`, and is here for your convenience.
+    pub fn get_system_font_height(&self) -> u8 {
+        14
+    }
+
+    /// Returns the width of the given `text` in the system's default font
+    /// 
+    /// This is a convenience function to provide a safe way of calling
+    /// [Graphics::get_text_width()] with a null pointer as the font.
     pub fn get_system_text_width(&self, text: &str, tracking: i32) -> Result<i32, Error> {
         let c_text = CString::new(text).map_err(Error::msg)?;
         pd_func_caller!(
