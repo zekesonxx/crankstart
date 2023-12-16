@@ -27,9 +27,12 @@ pub fn rect_make(x: f32, y: f32, width: f32, height: f32) -> PDRect {
     }
 }
 
+/// A color to use for rendering to the screen
 #[derive(Clone, Debug)]
 pub enum LCDColor {
+    /// A solid color pattern: black, white, clear, or XOR
     Solid(LCDSolidColor),
+    /// A custom color pattern created by [Bitmap::into_color()]
     Pattern(LCDPattern),
 }
 
@@ -45,9 +48,12 @@ impl From<LCDColor> for usize {
     }
 }
 
+/// Information about a [Bitmap], returned by [Bitmap::get_data()]
 #[derive(Debug)]
 pub struct BitmapData {
+    /// The width of the bitmap, in pixels
     pub width: c_int,
+    /// The height of the bitmap, in pixels
     pub height: c_int,
     pub rowbytes: c_int,
     pub hasmask: bool,
@@ -188,7 +194,7 @@ impl BitmapInner {
         todo!();
     }
 
-    pub fn into_color(&self, bitmap: Bitmap, top_left: Point2D<i32>) -> Result<LCDColor, Error> {
+    pub fn into_color(&self, top_left: Point2D<i32>) -> Result<LCDColor, Error> {
         let mut pattern = LCDPattern::default();
         let pattern_ptr = pattern.as_mut_ptr();
         let mut pattern_val = pattern_ptr as usize;
@@ -259,26 +265,53 @@ impl Drop for BitmapInner {
 
 pub type BitmapInnerPtr = Rc<RefCell<BitmapInner>>;
 
+/// A loaded bitmap image that can be drawn to the screen
+/// 
+/// This is a Rust-friendly wrapper around the Playdate SDK's Bitmap struct.
+/// 
+/// Note that [Clone]ing a Bitmap will clone a reference to the Bitmap pointer, not make a copy of the bitmap.
+/// To actually copy the bitmap, use [Bitmap::duplicate()]
 #[derive(Clone, Debug)]
 pub struct Bitmap {
     pub(crate) inner: BitmapInnerPtr,
 }
 
 impl Bitmap {
-    fn new(raw_bitmap: *mut crankstart_sys::LCDBitmap, owned: bool) -> Self {
+    /// Construct a [Bitmap] from a raw [LCDBitmap][crankstart_sys::LCDBitmap] pointer.
+    /// 
+    /// `owned` refers to whether or not the object owns the memory, so we know if we should free it when dropped
+    pub fn from_raw_parts(raw_bitmap: *mut crankstart_sys::LCDBitmap, owned: bool) -> Self {
         Bitmap {
             inner: Rc::new(RefCell::new(BitmapInner { raw_bitmap, owned })),
         }
     }
 
+    /// Gets [various info][BitmapData] about bitmap including its width, height, and raw pixel data.
+    /// 
+    /// The data is 1 bit per pixel packed format, in MSB order; in other words,
+    /// the high bit of the first byte in data is the top left pixel of the image.
+    /// 
+    /// If the bitmap has a mask, a pointer to its data is returned in mask, else NULL is returned.
+    /// Rust implementation note: the mask is currenly discarded if returned
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.getBitmapData)
     pub fn get_data(&self) -> Result<BitmapData, Error> {
         self.inner.borrow().get_data()
     }
 
+    /// Draws the bitmap with its upper-left corner at `location`, using the given [`flip` orientation][LCDBitmapFlip].
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.drawBitmap)
     pub fn draw(&self, location: ScreenPoint, flip: LCDBitmapFlip) -> Result<(), Error> {
         self.inner.borrow().draw(location, flip)
     }
 
+    /// Draws the bitmap scaled to `scale` with its upper-left corner at `location`.
+    /// 
+    /// Note that flip is not available when drawing scaled bitmaps, but negative
+    /// scale values will achieve the same effect.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.drawBitmapScaled)
     pub fn draw_scaled(&self, location: ScreenPoint, scale: Vector2D<f32>) -> Result<(), Error> {
         self.inner.borrow().draw_scaled(location, scale)
     }
@@ -286,6 +319,8 @@ impl Bitmap {
     /// Draw the `Bitmap` to the given `location`, rotated `degrees` about the `center` point,
     /// scaled up or down in size by `scale`.  `center` is given by two numbers between 0.0 and
     /// 1.0, where (0, 0) is the top left and (0.5, 0.5) is the center point.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.drawRotatedBitmap)
     pub fn draw_rotated(
         &self,
         location: ScreenPoint,
@@ -299,6 +334,8 @@ impl Bitmap {
     }
 
     /// Return a copy of self, rotated by `degrees` and scaled up or down in size by `scale`.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.rotatedBitmap)
     pub fn rotated(&self, degrees: f32, scale: Vector2D<f32>) -> Result<Bitmap, Error> {
         let raw_bitmap = self.inner.borrow().rotated(degrees, scale)?;
         Ok(Self {
@@ -306,6 +343,9 @@ impl Bitmap {
         })
     }
 
+    /// Draws the bitmap with its upper-left corner at `location` tiled inside `size` rectangle.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.tileBitmap)
     pub fn tile(
         &self,
         location: ScreenPoint,
@@ -315,6 +355,9 @@ impl Bitmap {
         self.inner.borrow().tile(location, size, flip)
     }
 
+    /// Clears bitmap, filling with the given bgcolor.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.clearBitmap)
     pub fn clear(&self, color: LCDColor) -> Result<(), Error> {
         self.inner.borrow().clear(color)
     }
@@ -326,14 +369,27 @@ impl Bitmap {
         })
     }
 
-    pub fn into_color(&self, bitmap: Bitmap, top_left: Point2D<i32>) -> Result<LCDColor, Error> {
-        self.inner.borrow().into_color(bitmap, top_left)
+    /// Use a 8x8 pattern from the bitmap to create a [LCDColor].
+    /// 
+    /// `top_left` indicates the top left corner of the 8 x 8 pattern within the bitmap.
+    /// 
+    /// [Playdate SDK Reference](https://sdk.play.date/inside-playdate-with-c/#f-graphics.setColorToPattern)
+    pub fn into_color(&self, top_left: Point2D<i32>) -> Result<LCDColor, Error> {
+        self.inner.borrow().into_color(top_left)
     }
 
     pub fn load(&self, path: &str) -> Result<(), Error> {
         self.inner.borrow().load(path)
     }
 
+    /// Check the collision between this bitmap and the `other` bitmap.
+    /// 
+    /// Returns `true` if:
+    /// Any of the opaque pixels in this bitmap, when positioned at `my_location`, with flip `my_flip`
+    /// overlap any of the opaque pixels in `other` at position `other_location` with flip `other_flip`
+    /// within the given `rect` shape
+    /// 
+    /// Returns `false` if no pixels overlap or if one or both fall completely outside of rect.
     pub fn check_mask_collision(
         &self,
         my_location: ScreenPoint,
@@ -406,7 +462,7 @@ impl BitmapTableInner {
                 index,
                 self.raw_bitmap_table
             );
-            let bitmap = Bitmap::new(raw_bitmap, true);
+            let bitmap = Bitmap::from_raw_parts(raw_bitmap, true);
             self.bitmaps.insert(index, bitmap.clone());
             Ok(bitmap)
         }
@@ -600,7 +656,7 @@ impl Graphics {
             !raw_bitmap.is_null(),
             "Null pointer returned from getDebugImage"
         );
-        Ok(Bitmap::new(raw_bitmap, false))
+        Ok(Bitmap::from_raw_parts(raw_bitmap, false))
     }
 
     /// Returns a copy the contents of the working frame buffer as a bitmap.
@@ -612,7 +668,7 @@ impl Graphics {
             !raw_bitmap.is_null(),
             "Null pointer returned from copyFrameBufferBitmap"
         );
-        Ok(Bitmap::new(raw_bitmap, true))
+        Ok(Bitmap::from_raw_parts(raw_bitmap, true))
     }
 
     /// Returns a bitmap containing the contents of the display buffer.
@@ -627,7 +683,7 @@ impl Graphics {
             !raw_bitmap.is_null(),
             "Null pointer returned from getDisplayBufferBitmap"
         );
-        Ok(Bitmap::new(raw_bitmap, false))
+        Ok(Bitmap::from_raw_parts(raw_bitmap, false))
     }
 
     /// Sets the background color shown when the display is [offset][crate::Display::set_offset] or for clearing dirty areas in the sprite system.
@@ -692,7 +748,7 @@ impl Graphics {
             !raw_bitmap.is_null(),
             "Null pointer returned from new_bitmap"
         );
-        Ok(Bitmap::new(raw_bitmap, true))
+        Ok(Bitmap::from_raw_parts(raw_bitmap, true))
     }
 
     /// Allocates and returns a new [Bitmap] from the file at `path`.
@@ -713,7 +769,7 @@ impl Graphics {
                 ))
             }
         } else {
-            Ok(Bitmap::new(raw_bitmap, true))
+            Ok(Bitmap::from_raw_parts(raw_bitmap, true))
         }
     }
 
